@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<head>
+  <meta charset="utf-8">
+  <script src="https://d3js.org/d3.v4.min.js"></script>
+  <script src="https://d3js.org/d3-color.v1.min.js"></script>
+  <script src="https://d3js.org/d3-interpolate.v1.min.js"></script>
+  <script src="https://d3js.org/d3-scale-chromatic.v1.min.js"></script>
+  <style>
+  .legend {                                                   /* NEW */
+        font-size: 12px;                                          /* NEW */
+      }                                                           /* NEW */
+      rect {                                                      /* NEW */
+        stroke-width: 2;                                          /* NEW */
+      }                    
+    svg { width:100%; height: 100% }
+  </style>
+
+</head>
+
+<body>
+  <div id = "map"></div> 
+   <div id="legend"></div>
+  <div id = "slider"><input type="range" min="1970" max="2015" id="nYear"></div>
+  <script>
+    var mapwidth = 960;
+    var mapheight = 500;
+
+
+var color = d3.scaleThreshold()
+    .domain(d3.range(0,20))
+    .range(d3.schemeBlues[9]);
+//var color = d3.scaleSequential(d3.interpolateReds);
+             // .domain(d3.range(0,20));
+var mapData = null, barData={}, barAttackTypes=[], lineAttacksData={};
+function processData(data, countryData) {
+  //console.log(data)
+  var yearGroup = d3.nest()
+        .key(function(d) { return d.year; })
+        .key(function(d) { return d.country;})
+        .rollup(function(v) { return v.reduce(function(s,d) { 
+            if (!+d.nkill) { return s; } return s + +d.nkill; 
+        }, 0); })
+        .entries(data);
+        //console.log(yearGroup)
+        var countryMap = {};
+        countryData.features.forEach(function (d) {
+          countryMap[d.properties.name] = d;
+        });
+      for(var i=0; i<yearGroup.length;i++){
+        var yearObj = yearGroup[i];
+        for(var j=0;j<yearObj.values.length;j++){
+          var country = countryMap[yearObj.values[j].key];
+          if(country){
+            country.properties[yearObj.key] = yearObj.values[j].value;
+          }
+        }
+      }
+      //console.log(countryData);
+      //rollup nkill data for year, region,attacktype
+      yearGroup = d3.nest()
+        .key(function(d) { return d.year; })
+        .key(function(d) { return d.region;})
+        .key(function(d) { return d.attacktype;})
+        .rollup(function(v) { return v.reduce(function(s,d) { 
+            if (!+d.nkill) { return s; } return s + +d.nkill; 
+        }, 0); })
+        .entries(data);
+      
+      for(var i=0; i<yearGroup.length;i++){
+        var yearObj = yearGroup[i];
+        var barDataForYear = [];
+        barData[yearObj.key] = barDataForYear;
+        for(var j=0;j<yearObj.values.length;j++){
+          var region = yearObj.values[j];
+          var record = {
+            region: region.key
+          };
+          var hasAttacks = false;
+          for(var k=0;k<region.values.length;k++){
+            var attackType = region.values[k];
+            if (!barAttackTypes.includes(attackType.key)){
+              barAttackTypes.push(attackType.key);
+            }
+            if (attackType.value) {
+              record[attackType.key] = +attackType.value;
+              hasAttacks = true;
+            }
+          }
+          if(hasAttacks) {
+            barDataForYear.push(record);
+          }
+        }
+      }
+      
+      //console.log(barData);
+      mapData = countryData;
+      createMap(mapData, "1970");
+      createXBar(barData["1970"]);
+    }
+
+    var projection = d3.geoMercator()
+    .scale(mapwidth/2 / Math.PI)
+ 
+      .translate([mapwidth/2, mapheight/2])
+
+    var path = d3.geoPath()
+      .projection(projection);
+    
+
+      var mapSvg = null;
+    function createMap(data, year) {
+      if(!mapSvg){
+        //Create SVG element
+      mapSvg = d3.select("#map").append("svg")
+      .attr("width", mapwidth)
+      .attr("height", mapheight);
+      }
+
+      mapSvg.append("g").selectAll("path")
+      .data(data.features)
+      .enter()
+      .append("path")
+      .attr("d", path)
+      .style("stroke", "#fff")
+      .style("stroke-width", "1")
+      .style("fill", function(d) {
+
+
+        // Get data value
+        var value = d.properties[year];
+
+        if (value) {
+          //If value exists…
+          return color(value);
+        } else {
+          //If value is undefined…
+          return "rgb(213,222,217)";
+        }
+      });
+    }
+
+    d3.json("https://cdn.rawgit.com/johan/world.geo.json/master/countries.geo.json",
+      function(countryData){
+        d3.json("gtdclean.json", 
+          function(data){
+            processData(data, countryData);
+          }
+          )
+    });
+
+    var monthLabelMap = {
+      "Month 1" : "Jan",
+      "Month 2" : "Feb",
+      "Month 3" : "Mar",
+      "Month 4" : "Apr",
+      "Month 5" : "May",
+      "Month 6" : "Jun",
+      "Month 7" : "Jul",
+      "Month 8" : "Aug",
+      "Month 9" : "Sep",
+      "Month 10" : "Oct",
+      "Month 11" : "Nov",
+      "Month 12" : "Dec"
+    }
+
+    d3.json("nattacks.json",
+      function(attacksData){
+        var transformedAttackData = {};
+        for (var i=0; i<attacksData.length; i++) {
+          var attacksInYear = attacksData[i];
+          var year = attacksInYear.Year;
+          for (var key in attacksInYear){
+            if (key != 'Year') {
+              var attacksInMonth = transformedAttackData[key];
+              if(!attacksInMonth) {
+                attacksInMonth = {month : monthLabelMap[key], monthNum: key.replace('Month ', ''), maxValue:0};
+                transformedAttackData[key] = attacksInMonth;
+              }
+              attacksInMonth[year] = attacksInYear[key];
+              if (attacksInMonth.maxValue < attacksInYear[key]) {
+                attacksInMonth.maxValue = attacksInYear[key];
+              }
+            }
+          }
+        }
+        initLineChart(Object.values(transformedAttackData));
+    });
+
+    d3.select("#nYear").on("input", function() {
+      createMap(mapData, this.value);
+      updateBar(barData[this.value]);
+    });
+
+
+</script>
+<br>
+<br>
+
+<div id= "sbarchart"></div>
+<script>
+
+
+// set the dimensions and margins of the graph
+var color1 = d3.scaleOrdinal(d3.schemeCategory20);
+var margin = {top: 20, right: 20, bottom: 30, left: 40},
+    width = 960 - margin.left - margin.right,
+    height = 500 - margin.top - margin.bottom, barSvg, g, x0, x1, y, keys = barAttackTypes, z = d3.scaleOrdinal()
+      .range(["#98abc5", "#8a89a6", "#7b6888", "#6b486b", "#a05d56", "#d0743c", "#ff8c00"]);
+function createXBar(data) {
+  var svg = barSvg;
+  if (!svg) {
+    svg = barSvg = d3.select("#sbarchart")
+      .append("svg")
+      .attr("width", "960")
+      .attr("height", "500");
+    
+    width = +svg.attr("width") - margin.left - margin.right,
+    height = +svg.attr("height") - margin.top - margin.bottom,
+    g = svg.append("g").attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+  }
+   x0 = d3.scaleBand()
+      .rangeRound([0, width])
+      .paddingInner(0.1);
+
+   x1 = d3.scaleBand()
+      .padding(0.05);
+
+   y = d3.scaleLinear()
+      .rangeRound([height, 0]);
+
+    x0.domain(data.map(function(d) { return d.region; }));
+    x1.domain(keys).rangeRound([0, x0.bandwidth()]);
+    y.domain([0, d3.max(data, function(d) { return d3.max(keys, function(key) { return d[key]; }); })]).nice();
+
+    g.append("g")
+      .selectAll("g")
+      .data(data)
+      .enter().append("g")
+        .attr("class", "groups")
+        .attr("transform", function(d) { return "translate(" + x0(d.region) + ",0)"; })
+      .selectAll("rect")
+      .data(function(d) { 
+        var _data = [];
+        for (var i=0; i<barAttackTypes.length; i++) {
+          if (d[barAttackTypes[i]]) {
+            _data.push({key: barAttackTypes[i], value: d[barAttackTypes[i]]})
+          }
+        }
+        return _data;
+       })
+      .enter().append("rect")
+        .attr("class", "bar")
+        .attr("x", function(d) { return x1(d.key); })
+        .attr("y", function(d) { return y(d.value); })
+        .attr("width", x1.bandwidth())
+        .attr("height", function(d) { return height - y(d.value); })
+        .attr("fill", function(d) { return z(d.key); });
+
+    g.append("g")
+        .attr("class", "x axis")
+        .attr("transform", "translate(0," + height + ")")
+        .call(d3.axisBottom(x0));
+
+    g.append("g")
+        .attr("class", "y axis")
+        .call(d3.axisLeft(y).ticks(null, "s"))
+      .append("text")
+        .attr("x", 2)
+        .attr("y", y(y.ticks().pop()) + 0.5)
+        .attr("dy", "0.32em")
+        .attr("fill", "#000")
+        .attr("font-weight", "bold")
+        .attr("text-anchor", "start")
+        .text("# Attacks");
+
+    var legend = g.append("g")
+        .attr("font-family", "sans-serif")
+        .attr("font-size", 10)
+        .attr("text-anchor", "end")
+      .selectAll("g")
+      .data(keys.slice().reverse())
+      .enter().append("g")
+        .attr("transform", function(d, i) { return "translate(0," + i * 20 + ")"; });
+
+    legend.append("rect")
+        .attr("x", width - 19)
+        .attr("width", 19)
+        .attr("height", 19)
+        .attr("fill", z);
+
+    legend.append("text")
+        .attr("x", width - 24)
+        .attr("y", 9.5)
+        .attr("dy", "0.32em")
+        .text(function(d) { return d; });
+
+}
+
+function updateBar(data){
+    x0.domain(data.map(function(d) { return d.region; }));
+    x1.domain(keys).rangeRound([0, x0.bandwidth()]);
+    y.domain([0, d3.max(data, function(d) { return d3.max(keys, function(key) { return d[key]; }); })]).nice();
+  
+  //get the width of each bar 
+  var barWidth = width / data.length;
+  
+  //select all bars on the graph, take them out, and exit the previous data set. 
+  //then you can add/enter the new data set
+  g.selectAll(".bar")
+          .remove()
+          .exit();
+  g.selectAll(".groups")
+          .remove()
+          .exit();
+  g.selectAll(".x")
+          .remove()
+          .exit();
+  g.selectAll(".y")
+          .remove()
+          .exit();
+  //now actually give each rectangle the corresponding data
+  g.append("g")
+      .selectAll("g")
+      .data(data)
+      .enter().append("g")
+        .attr("class", "groups")
+        .attr("transform", function(d) { return "translate(" + x0(d.region) + ",0)"; })
+      .selectAll("rect")
+      .data(function(d) { 
+        var _data = [];
+        for (var i=0; i<barAttackTypes.length; i++) {
+          if (d[barAttackTypes[i]]) {
+            _data.push({key: barAttackTypes[i], value: d[barAttackTypes[i]]})
+          }
+        }
+        return _data;
+       })
+      .enter().append("rect")
+        .attr("class", "bar")
+        .attr("x", function(d) { return x1(d.key); })
+        .attr("y", function(d) { return y(d.value); })
+        .attr("width", x1.bandwidth())
+        .attr("height", function(d) { return height - y(d.value); })
+        .attr("fill", function(d) { return z(d.key); });
+
+    g.append("g")
+        .attr("class", "x axis")
+        .attr("transform", "translate(0," + height + ")")
+        .call(d3.axisBottom(x0));
+
+    g.append("g")
+        .attr("class", "y axis")
+        .call(d3.axisLeft(y).ticks(null, "s"))
+      .append("text")
+        .attr("x", 2)
+        .attr("y", y(y.ticks().pop()) + 0.5)
+        .attr("dy", "0.32em")
+        .attr("fill", "#000")
+        .attr("font-weight", "bold")
+        .attr("text-anchor", "start")
+        .text("# Attacks");
+
+}
+</script>
+<div id="linechart">
+Year: <select name="year" id="year" onChange="updateLineChart(this.value)">
+    </select>
+    <br>
+  </div>
+
+<script type="text/javascript">
+var linesvg = null, lineData=null , linex=null, liney, lineYAxis, defaultYear=1980;
+var linemargin = {top: 20, right: 20, bottom: 30, left: 45},
+          linewidth = 600- linemargin.left - linemargin.right,
+          lineheight = 400 -linemargin.top - linemargin.bottom;
+
+function initLineChart(data) {
+  lineData = data;
+
+    var years = Object.keys(data[0]).filter(function(k) { return k != "month" || k != "monthNum" || k != "maxValue"; });
+    d3.select("#linechart select")
+    .selectAll("option").data(years)
+    .enter().append("option")
+    .property("selected", function(d){ return d == defaultYear; })
+    .attr("value", function(d) { return d; })
+    .text(function(d) { return d; });
+
+    var x = d3.scaleBand()
+    .range([0, linewidth])
+    .domain(data.map(function(d){return d.month}))
+    .padding(0.1);
+
+    linex = x;
+
+    y = d3.scaleLinear().range([lineheight, 0])
+    .domain([0,d3.max(data,function(d){return d.maxValue})]);
+
+    liney = y;
+    lineYAxis = d3.axisLeft(y)
+      .tickFormat(d3.formatPrefix(".0",1e1));
+  
+    var svg = d3.select("#linechart")
+                .append("svg")
+                .attr("width", linewidth + margin.left + margin.right)
+                .attr("height", lineheight + margin.top + margin.bottom)
+                .append("g")
+                .attr("transform", 
+          "translate(" + margin.left + "," + margin.top + ")");
+  
+    svg.append("g")
+      .attr("transform", "translate(0," + lineheight + ")")
+      .call(d3.axisBottom(x).tickValues(x.domain().filter(function(d,i){ return !(i%1)})));
+
+    //http://bl.ocks.org/phoebebright/3061203
+    var padding = -90;
+    svg.append("text")
+          .attr("text-anchor", "middle")  // this makes it easy to centre the text as the transform is applied to the anchor
+          .attr("transform", "translate("+ (linewidth/2) +","+(lineheight-(padding/3))+")")  // centre below axis
+          .text("Month");
+
+    svg.append("g")
+    .attr("class", "y axis")
+    .call(lineYAxis);
+    var padding = -65;
+    svg.append("text")
+          .attr("text-anchor", "middle")  
+          .attr("transform", "translate("+ (padding/2) +","+(lineheight/2)+")rotate(-90)")  
+          .text("No of Attacks");
+    linesvg=svg;
+
+    updateLineChart(defaultYear);
+}
+
+    function updateLineChart(series) {
+      liney = d3.scaleLinear().range([lineheight, 0])
+        .domain([0,d3.max(lineData,function(d){return d[series] + 50})]);
+      lineYAxis = d3.axisLeft(liney)
+      .tickFormat(d3.formatPrefix(".0",1e1));
+      var valueline2 = d3.line()
+        .x(function(d) { return linex(d.month); })
+        .y(function(d) {return liney(d[series]); });
+        
+      linesvg.select("#month-line").remove();
+      //svg.selectAll("path.line").remove();
+      linesvg.append("path")
+          .datum(lineData)
+          .attr("fill", "none")
+          .attr("stroke", "steelblue")
+          .attr("stroke-linejoin", "round")
+          .attr("stroke-linecap", "round")
+          .attr("stroke-width", 1.5)
+          .attr("d", valueline2)
+          .attr("id", "month-line");
+      linesvg.select(".y.axis") // change the y axis
+            .call(lineYAxis);
+    }
+    //updateLineChart("1980");
+
+
+
+//http://bl.ocks.org/phoebebright/3061203
+  </script>
+</body>
